@@ -771,7 +771,7 @@ static int tcpm_start_toggling(struct tcpc_dev *dev,
 		printf("%s: unable to start drp toggling(%d)\n", __func__, ret);
 		goto done;
 	}
-	printf("fusb302 start drp toggling\n");
+	printf("fusb302 start drp toggling, port type: %u\n", port_type);
 done:
 
 	return ret;
@@ -1518,6 +1518,7 @@ static struct dm_power_delivery_ops fusb302_ops = {
 
 static const struct udevice_id fusb302_ids[] = {
 	{ .compatible = "fcs,fusb302" },
+	{ .compatible = "fairchild,fusb302" },
 	{ }
 };
 

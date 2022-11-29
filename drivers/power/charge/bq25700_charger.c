@@ -20,6 +20,7 @@ DECLARE_GLOBAL_DATA_PTR;
 
 #define COMPAT_BQ25700				"ti,bq25700"
 #define COMPAT_BQ25703				"ti,bq25703"
+#define COMPAT_SC8886                           "southchip,sc8886"
 
 #define BQ25700_I2C_SPEED			100000
 #define BQ25700_CHARGE_CURRENT_1500MA		0x5C0
@@ -301,20 +302,26 @@ static int bq25700_ofdata_to_platdata(struct udevice *dev)
 {
 	struct bq25700 *charger = dev_get_priv(dev);
 	const void *blob = gd->fdt_blob;
-	int node, node1;
+	int node, node1, node2;
 
 	charger->dev = dev;
 
 	node = fdt_node_offset_by_compatible(blob, 0, COMPAT_BQ25700);
 	node1 = fdt_node_offset_by_compatible(blob, 0, COMPAT_BQ25703);
-	if ((node < 0) && (node1 < 0)) {
+	node2 = fdt_node_offset_by_compatible(blob, 0, COMPAT_SC8886);
+	if ((node < 0) && (node1 < 0) && (node2 < 0)) {
 		printf("Can't find dts node for charger bq25700\n");
 		return -ENODEV;
 	}
 
 	if (node < 0) {
-		node = node1;
-		charger->chip_id = BQ25703_ID;
+		if (node1 < 0) {
+			node = node2;
+			charger->chip_id = BQ25700_ID;
+		} else {
+			node = node1;
+			charger->chip_id = BQ25703_ID;
+		}
 	} else {
 		charger->chip_id = BQ25700_ID;
 	}
@@ -350,6 +357,7 @@ static int bq25700_probe(struct udevice *dev)
 static const struct udevice_id charger_ids[] = {
 	{ .compatible = "ti,bq25700" },
 	{ .compatible = "ti,bq25703" },
+	{ .compatible = "southchip,sc8886" },
 	{ },
 };
 
