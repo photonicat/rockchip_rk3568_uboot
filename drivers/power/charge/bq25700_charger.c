@@ -17,6 +17,7 @@ DECLARE_GLOBAL_DATA_PTR;
 
 #define BQ25700_ID				0x25700
 #define BQ25703_ID				0x25703
+#define SC8886_ID				0x08886
 
 #define COMPAT_BQ25700				"ti,bq25700"
 #define COMPAT_BQ25703				"ti,bq25703"
@@ -116,9 +117,44 @@ static const union {
 	[TBL_OTGCUR] = {.rt = {0, 6350000, 50000} },
 };
 
+static const union {
+	struct bq25700_range  rt;
+} sc8886_tables[] = {
+	/* range tables */
+	[TBL_ICHG] = { .rt = {0, 8128000, 64000} },
+	/* uV */
+	[TBL_CHGMAX] = { .rt = {0, 19200000, 16000} },
+	/* uV  max charge voltage*/
+	[TBL_INPUTVOL] = { .rt = {3200000, 19520000, 64000} },
+	/* uV  input charge voltage*/
+	[TBL_INPUTCUR] = {.rt = {0, 6350000, 50000} },
+	/*uA input current*/
+	[TBL_SYSVMIN] = { .rt = {1024000, 16182000, 256000} },
+	/* uV min system voltage*/
+	[TBL_OTGVOL] = {.rt = {1280000, 20800000, 8000} },
+	/*uV OTG volage*/
+	[TBL_OTGCUR] = {.rt = {0, 6350000, 50000} },
+};
+
 static u32 bq25700_find_idx(u32 value, enum bq25700_table_ids id)
 {
 	const struct bq25700_range *rtbl = &bq25700_tables[id].rt;
+	u32 rtbl_size;
+	u32 idx;
+
+	rtbl_size = (rtbl->max - rtbl->min) / rtbl->step + 1;
+
+	for (idx = 1;
+	     idx < rtbl_size && (idx * rtbl->step + rtbl->min <= value);
+	     idx++)
+		;
+
+	return idx - 1;
+}
+
+static u32 sc8886_find_idx(u32 value, enum bq25700_table_ids id)
+{
+	const struct bq25700_range *rtbl = &sc8886_tables[id].rt;
 	u32 rtbl_size;
 	u32 idx;
 
@@ -191,6 +227,9 @@ static int bq25700_get_pd_output_val(struct bq25700 *charger,
 	ret = power_delivery_get_data(charger->pd, &pd_data);
 	if (ret)
 		return ret;
+
+	printf("PD online=%d, voltage=%d, current=%d\n", pd_data.online, pd_data.voltage, pd_data.current);
+
 	if (!pd_data.online || !pd_data.voltage || !pd_data.current)
 		return -EINVAL;
 
@@ -298,6 +337,65 @@ static void bq25703_charger_current_init(struct bq25700 *charger)
 			      charge_current);
 }
 
+static void sc8886_charger_current_init(struct bq25700 *charger)
+{
+	u16 charge_current = BQ25700_CHARGE_CURRENT_1500MA;
+	u16 sdp_inputcurrent = BQ25700_SDP_INPUT_CURRENT_500MA;
+	u16 dcp_inputcurrent = BQ25700_DCP_INPUT_CURRENT_1500MA;
+	int pd_inputvol,  pd_inputcurrent;
+	u16 vol_idx = 0, cur_idx;
+	u16 temp;
+
+	temp = bq25700_read(charger, BQ25703_CHARGEOPTION0_REG);
+	temp &= (~WATCHDOG_ENSABLE);
+	bq25700_write(charger, BQ25703_CHARGEOPTION0_REG, temp);
+
+	if (!bq25700_get_pd_output_val(charger, &pd_inputvol,
+				       &pd_inputcurrent)) {
+		printf("%s pd charge input vol:%duv current:%dua\n",
+		       __func__, pd_inputvol, pd_inputcurrent);
+		if (pd_inputvol > 5000000) {
+			vol_idx = sc8886_find_idx(pd_inputvol - 3200000,
+						   TBL_INPUTVOL);
+			vol_idx = vol_idx << 6;
+		}
+		cur_idx = sc8886_find_idx(pd_inputcurrent,
+					   TBL_INPUTCUR);
+		cur_idx  = cur_idx << 8;
+		if (pd_inputcurrent != 0) {
+			bq25700_write(charger, BQ25703_INPUTCURREN_REG,
+				      cur_idx);
+			if (vol_idx)
+				bq25700_write(charger, BQ25703_INPUTVOLTAGE_REG,
+					      vol_idx);
+			charge_current = sc8886_find_idx(charger->ichg,
+							  TBL_ICHG);
+			charge_current = charge_current << 8;
+		}
+	} else {
+		if (bq25700_get_usb_type() > 1)
+			bq25700_write(charger, BQ25703_INPUTCURREN_REG,
+				      dcp_inputcurrent);
+		else
+			bq25700_write(charger, BQ25703_INPUTCURREN_REG,
+				      sdp_inputcurrent);
+	}
+
+	if (bq25703_charger_status(charger))
+		bq25700_write(charger, BQ25703_CHARGECURREN_REG,
+			      charge_current);
+
+	temp = bq25700_read(charger, 0x34);
+	temp &= (~4);
+	bq25700_write(charger, 0x34, temp);
+
+	temp = bq25700_read(charger, 0x6);
+	vol_idx = sc8886_find_idx(20800000, TBL_OTGVOL);
+	temp &= 0x8001;
+	temp |= (vol_idx << 1);
+	bq25700_write(charger, 0x6, temp);
+}
+
 static int bq25700_ofdata_to_platdata(struct udevice *dev)
 {
 	struct bq25700 *charger = dev_get_priv(dev);
@@ -317,7 +415,7 @@ static int bq25700_ofdata_to_platdata(struct udevice *dev)
 	if (node < 0) {
 		if (node1 < 0) {
 			node = node2;
-			charger->chip_id = BQ25700_ID;
+			charger->chip_id = SC8886_ID;
 		} else {
 			node = node1;
 			charger->chip_id = BQ25703_ID;
@@ -346,8 +444,12 @@ static int bq25700_probe(struct udevice *dev)
 		charger->pd = NULL;
 	}
 
+	printf("Charger Chip ID: %X\n", charger->chip_id);
+
 	if (charger->chip_id == BQ25700_ID)
 		bq25700_charger_current_init(charger);
+	else if(charger->chip_id == SC8886_ID)
+		sc8886_charger_current_init(charger);
 	else
 		bq25703_charger_current_init(charger);
 
