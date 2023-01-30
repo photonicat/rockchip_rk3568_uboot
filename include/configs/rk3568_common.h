@@ -107,6 +107,8 @@
 	"setenv bootargs \"${bootargs_orig} root=/dev/mmcblk1p2\";" \
 	"run bootcmd_mmc1;" \
 	"setenv bootargs \"${bootargs_orig} root=/dev/mmcblk0p6\";" \
+	"setenv distro_bootpart 5;" \
+	"run bootcmd_mmc0;" \
         "boot_fit;" \
 	"run distro_bootcmd;"
 #endif
